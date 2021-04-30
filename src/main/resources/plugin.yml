@@ -1,9 +1,13 @@
-name: ${project.name}
-main: ${mainClass}
+name: WooMinecraft
+main: com.plugish.woominecraft.WooMinecraft
 version: ${project.version}
-authors: [JerryWood, TekkitCommando, Phillmac]
+authors:
+  - JerryWood
+  - TekkitCommando
+  - Phillmac
+  - mkko120
 description: ${project.description}
-website:  http://woominecraft.com
+website:  https://woominecraft.com
 api-version: 1.13
 
 commands:

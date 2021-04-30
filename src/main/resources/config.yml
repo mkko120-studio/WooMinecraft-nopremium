@@ -10,7 +10,7 @@ update_interval: 1500
 
 # You must set this to your WordPress site URL.  If you installed WordPress in a
 # subdirectory, it should point there.
-url: "http://playground.dev"
+url: "https://playground.dev"
 
 # This must match the WordPress key in your admin panel for WooMinecraft
 # This is a key that YOU set, both needing to be identical in the admin panel

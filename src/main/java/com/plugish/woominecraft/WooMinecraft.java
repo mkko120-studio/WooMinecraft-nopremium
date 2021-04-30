@@ -22,22 +22,27 @@ import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitScheduler;
 
 import java.io.BufferedReader;
-import java.io.FileNotFoundException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
 public final class WooMinecraft extends JavaPlugin {
 
-	static WooMinecraft instance;
+	private static WooMinecraft instance;
+	public static WooMinecraft getInstance() {
+		return instance;
+	}
 
 	private YamlConfiguration l10n;
+	public YamlConfiguration config;
 
 	@Override
 	public void onEnable() {
 		instance = this;
-		YamlConfiguration config = (YamlConfiguration) getConfig();
+		config = (YamlConfiguration) instance.getConfig();
 
 		// Save the default config.yml
 		try{
@@ -52,23 +57,24 @@ public final class WooMinecraft extends JavaPlugin {
 		}
 
 		// Load the commands.
-		getCommand( "woo" ).setExecutor( new WooCommand() );
+		getCommand( "woo" ).setExecutor(new WooCommand());
 
 		// Log when plugin is initialized.
 		getLogger().info( this.getLang( "log.com_init" ));
 
 		// Setup the scheduler
 		BukkitRunner scheduler = new BukkitRunner(instance);
-		scheduler.runTaskTimerAsynchronously( instance, config.getInt( "update_interval" ) * 20, config.getInt( "update_interval" ) * 20 );
+		int interval = config.getInt("update_interval");
+		scheduler.runTaskTimerAsynchronously( instance, (long)interval * 20, (long)interval * 20 );
 
 		// Log when plugin is fully enabled ( setup complete ).
-		getLogger().info( this.getLang( "log.enabled" ) );
+		getLogger().info( this.getLang("log.enabled"));
 	}
 
 	@Override
 	public void onDisable() {
 		// Log when the plugin is fully shut down.
-		getLogger().info( this.getLang( "log.com_init" ) );
+		getLogger().info( this.getLang("log.com_init"));
 	}
 
 	/**
@@ -80,11 +86,9 @@ public final class WooMinecraft extends JavaPlugin {
 	 */
 	String getLang(String path) {
 		if ( null == this.l10n ) {
-
 			LangSetup lang = new LangSetup( instance );
 			l10n = lang.loadConfig();
 		}
-
 		return this.l10n.getString( path );
 	}
 
@@ -98,11 +102,11 @@ public final class WooMinecraft extends JavaPlugin {
 	 */
 	private void validateConfig() throws Exception {
 
-		if ( 1 > this.getConfig().getString( "url" ).length() ) {
+		if (config.getString( "url" ).length() < 1) {
 			throw new Exception( "Server URL is empty, check config." );
-		} else if ( this.getConfig().getString( "url" ).equals( "http://playground.dev" ) ) {
+		} else if (config.getString( "url" ).equals( "https://playground.dev" ) ) {
 			throw new Exception( "URL is still the default URL, check config." );
-		} else if ( 1 > this.getConfig().getString( "key" ).length() ) {
+		} else if (config.getString( "key" ).length() < 1) {
 			throw new Exception( "Server Key is empty, this is insecure, check config." );
 		}
 	}
@@ -114,7 +118,7 @@ public final class WooMinecraft extends JavaPlugin {
 	 * @throws Exception Why the URL failed.
 	 */
 	private URL getSiteURL() throws Exception {
-		return new URL( getConfig().getString( "url" ) + "/wp-json/wmc/v1/server/" + getConfig().getString( "key" ) );
+		return new URL( config.getString( "url" ) + "/wp-json/wmc/v1/server/" + config.getString( "key" ) );
 	}
 
 	/**
@@ -139,11 +143,11 @@ public final class WooMinecraft extends JavaPlugin {
 
 		// Create new object from JSON response.
 		Gson gson = new GsonBuilder().create();
+		// Log if debugging is enabled.
+		wmc_log( pendingOrders );
 		WMCPojo wmcPojo = gson.fromJson( pendingOrders, WMCPojo.class );
 		List<Order> orderList = wmcPojo.getOrders();
 
-		// Log if debugging is enabled.
-		wmc_log( pendingOrders );
 
 		// Validate we can indeed process what we need to.
 		if ( wmcPojo.getData() != null ) {
@@ -159,32 +163,44 @@ public final class WooMinecraft extends JavaPlugin {
 
 		// foreach ORDERS in JSON feed
 		List<Integer> processedOrders = new ArrayList<>();
+		if (isDebug()) {
+			wmc_log("foreach with orders");
+		}
 		for ( Order order : orderList ) {
-			Player player = getServer().getPlayerExact( order.getPlayer() );
-			if ( null == player ) {
-				continue;
-			}
+			Player player = Bukkit.getServer().getPlayerExact(order.getPlayer());
+			if ( player == null ) {
+				// Offline player support
+				wmc_log("Executing order for CRACKED player: " + order.getPlayer());
+				wmc_log("This can cause some problems so please be aware of that", 2);
+				for (String command: order.getCommands()) {
+					Bukkit.dispatchCommand(Bukkit.getConsoleSender(), command);
+					wmc_log("Dispatched command: " + command);
+				}
+			} else {
+				// World whitelisting.
+				if (getConfig().isSet("whitelist-worlds")) {
+					List<String> whitelistWorlds = config.getStringList("whitelist-worlds");
+					String playerWorld = player.getWorld().getName();
+					if (!whitelistWorlds.contains(playerWorld)) {
+						wmc_log("Player " + player.getDisplayName() + " was in world " + playerWorld + " which is not in the white-list, no commands were ran.");
+						continue;
+					}
+				}
 
-			// World whitelisting.
-			if ( getConfig().isSet( "whitelist-worlds" ) ) {
-				List<String> whitelistWorlds = getConfig().getStringList( "whitelist-worlds" );
-				String playerWorld = player.getWorld().getName();
-				if ( ! whitelistWorlds.contains( playerWorld ) ) {
-					wmc_log( "Player " + player.getDisplayName() + " was in world " + playerWorld + " which is not in the white-list, no commands were ran." );
-					continue;
+				// Walk over all commands and run them at the next available tick.
+				for (String command : order.getCommands()) {
+					BukkitScheduler scheduler = Bukkit.getServer().getScheduler();
+					wmc_log("initiating command execution...");
+					scheduler.scheduleSyncDelayedTask(instance, () -> Bukkit.getServer().dispatchCommand(Bukkit.getServer().getConsoleSender(), command), 20L);
+					wmc_log("executed command: " + command);
 				}
 			}
+				wmc_log( "Adding item to list - " + order.getOrderId() );
+				processedOrders.add(order.getOrderId());
+				wmc_log( "Processed length is " + processedOrders.size() );
 
-			// Walk over all commands and run them at the next available tick.
-			for ( String command : order.getCommands() ) {
-				BukkitScheduler scheduler = Bukkit.getServer().getScheduler();
-				scheduler.scheduleSyncDelayedTask( instance, () -> Bukkit.getServer().dispatchCommand( Bukkit.getServer().getConsoleSender(), command ), 20L );
-			}
-
-			wmc_log( "Adding item to list - " + order.getOrderId() );
-			processedOrders.add( order.getOrderId() );
-			wmc_log( "Processed length is " + processedOrders.size() );
 		}
+
 
 		// If it's empty, we skip it.
 		if ( processedOrders.isEmpty() ) {
@@ -212,18 +228,18 @@ public final class WooMinecraft extends JavaPlugin {
 		OkHttpClient client = new OkHttpClient();
 
 		// Process stuffs now.
-		RequestBody body = RequestBody.create( MediaType.parse( "application/json; charset=utf-8" ), orders );
-		Request request = new Request.Builder().url( getSiteURL() ).post( body ).build();
-		Response response = client.newCall( request ).execute();
+		RequestBody body = RequestBody.create(orders, MediaType.parse("application/json; charset=utf-8"));
+		Request request = new Request.Builder().url(getSiteURL()).post(body).build();
+		Response response = client.newCall(request).execute();
 
 		// If the body is empty we can do nothing.
-		if ( null == response.body() ) {
-			throw new Exception( "Received empty response from your server, check connections." );
+		if (response.body() == null) {
+			throw new Exception("Received empty response from your server, check connections.");
 		}
 
 		// Get the JSON reply from the endpoint.
 		WMCPojo wmcPojo = gson.fromJson( response.body().string(), WMCPojo.class );
-		if ( null != wmcPojo.getCode() ) {
+		if (null != wmcPojo.getCode()) {
 			wmc_log( "Received error when trying to send post data:" + wmcPojo.getCode(), 3 );
 			throw new Exception( wmcPojo.getMessage() );
 		}
@@ -237,7 +253,7 @@ public final class WooMinecraft extends JavaPlugin {
 	 * @return boolean
 	 */
 	private boolean isDebug() {
-		return getConfig().getBoolean( "debug" );
+		return getConfig().getBoolean("debug");
 	}
 
 	/**
@@ -247,30 +263,37 @@ public final class WooMinecraft extends JavaPlugin {
 	 * @throws Exception On failure.
 	 */
 	private String getPendingOrders() throws Exception {
-		URL baseURL = getSiteURL();
+		InputStream is = this.getSiteURL().openStream();
 		BufferedReader in;
 		try {
-			in = new BufferedReader(new InputStreamReader(baseURL.openStream()));
-		} catch( FileNotFoundException e ) {
-			String msg = e.getMessage().replace( getConfig().getString( "key" ), "privateKey" );
-			throw new FileNotFoundException( msg );
+			// Grab JSON data from web server.
+			in = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
+		} catch( Exception e ) {
+			String key = config.getString("key");
+			String msg = e.getMessage();
+			assert key != null;
+			if (msg.contains(key)) {
+				msg = msg.replaceAll(key,"privateKey" );
+			}
+			throw new Exception(msg);
 		}
 
 		StringBuilder buffer = new StringBuilder();
 
 		// Walk over each line of the response.
 		String line;
-		while ( ( line = in.readLine() ) != null ) {
-			buffer.append( line );
+		while ((line = in.readLine()) != null) {
+			buffer.append(line);
 		}
 
+		// Close connection to webpage.
 		in.close();
 
 		return buffer.toString();
 	}
 
 	/**
-	 * Log stuffs.
+	 * Function for logging stuff.
 	 *
 	 * @param message The message to log.
 	 */
@@ -279,18 +302,18 @@ public final class WooMinecraft extends JavaPlugin {
 	}
 
 	/**
-	 * Log stuffs.
+	 * Function for logging stuff with log level options.
 	 *
 	 * @param message The message to log.
 	 * @param level The level to log it at.
 	 */
 	private void wmc_log(String message, Integer level) {
 
-		if ( ! isDebug() ) {
+		if (!isDebug()) {
 			return;
 		}
 
-		switch ( level ) {
+		switch (level) {
 			case 1:
 				this.getLogger().info( message );
 				break;
